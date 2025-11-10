@@ -213,5 +213,6 @@ __marimo__/
 *.prof
 *.lprof
 *.txt
-__pycache__/
+
+# Wandb
 wandb/

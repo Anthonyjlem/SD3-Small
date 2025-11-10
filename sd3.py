@@ -146,7 +146,7 @@ class DiT(nn.Module):
         self._t_dim = 320
         self._sinusoidal_embedding = SinusoidalEncoding(self._t_dim)
         self._num_patches = 64
-        self._positional_embedding = nn.Parmaeter(torch.zeros(1, self._num_patches, self._x_dim))
+        self._positional_embedding = nn.Parameter(torch.zeros(1, self._num_patches, self._x_dim))
         self._patching = nn.Unfold(kernel_size=(self._kernel_size, self._kernel_size), stride=(self._kernel_size, self._kernel_size))
         self._latent_height = 16
         self._latent_width = 16
@@ -192,7 +192,7 @@ class DiT(nn.Module):
         return t
 
 
-class SD3(nn.module):
+class SD3(nn.Module):
 
     def __init__(self, clip, tokenizer, vae):
         super().__init__()

@@ -208,3 +208,5 @@ __marimo__/
 
 # File types
 *.pdf
+__pycache__/
+wandb/

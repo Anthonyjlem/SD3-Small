@@ -208,5 +208,8 @@ __marimo__/
 
 # File types
 *.pdf
+*.pt
+*.safetensors
+*.prof
 __pycache__/
 wandb/

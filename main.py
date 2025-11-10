@@ -1,10 +1,12 @@
 import os
+os.environ["WANDB_MODE"] = "disabled"
 
 # prevent OpenMP duplication
-os.environ["KMP_DUPLICATE_LIB_OK"] = "FALSE"
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
+# os.environ["KMP_DUPLICATE_LIB_OK"] = "FALSE"
+# os.environ["OMP_NUM_THREADS"] = "1"
+# os.environ["MKL_NUM_THREADS"] = "1"
 
+import cProfile
 from diffusers import AutoencoderKL
 import matplotlib.pyplot as plt
 import open_clip
@@ -21,10 +23,12 @@ from linear_warmup_scheduler import linear_warmup_scheduler
 from sd3 import DiT
 
 
-BATCH_SIZE = 128
+BATCH_SIZE = 16
 TRAIN_MODEL_SAVE_PATH = "model.pt"
 VAL_MODEL_SAVE_PATH = "model_ema.pt"
 
+
+profiler = cProfile.Profile()
 
 train_transform = transforms.Compose([
     transforms.Resize(128),
@@ -135,36 +139,66 @@ def get_vae_latent(image, vae):
 # plt.show()
 
 
+def sample_time(num_samples):
+    with torch.no_grad():
+        # Logit-Normal Sampling
+        u = torch.randn(num_samples)
+        t = 1 / (1 + torch.exp(-u))
+    return t
+
+
 def train_one_epoch(model, epoch, num_epochs, train_loader, vae, clip, optimizer, loss_fn, scheduler, scaler, ema_model):
     model.train()
     running_loss = 0
-    pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+    pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{num_epochs}")
     for i, data in enumerate(pbar):
+        profiler.enable()
         images, tokens = data
         images, tokens = images.to("cuda"), tokens.to("cuda")
         latents = get_vae_latent(images, vae)  # B x C x H x W
-        with torch.autocast(device_type="cuda"), torch.no_grad():
-            ctx_pool = clip.encode_text(tokens)
-            ctx_pool /= ctx_pool.norm(dim=0)  # B x 768
-        t = model.sample_time(latents.size(0)).to("cuda")  # B
+        text_embeddings = clip.forward_intermediates(text=tokens, text_indices=1, normalize_intermediates=True)
+        ctx = text_embeddings["text_intermediates"][-1]
+        ctx_pool = text_embeddings["text_features"]
+        t = sample_time(latents.size(0)).to("cuda")  # B
         t_unsqueeze = t[:,None,None,None]
         epsilon = torch.randn_like(latents)
         z = (1 - t_unsqueeze)*latents + t_unsqueeze*epsilon
         targets = -t_unsqueeze/(1-t_unsqueeze)*z - t_unsqueeze*(-t_unsqueeze/(1-t_unsqueeze) - 1/t_unsqueeze)*epsilon
         optimizer.zero_grad()
-        with torch.autocast(device_type="cuda"):
-            velocities = model(latents, tokens, ctx_pool, t)
-            loss = loss_fn(velocities, targets)
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        velocities = model(latents, ctx, ctx_pool, t)
+        loss = loss_fn(velocities, targets)
+        loss.backward()
+        optimizer.step()
+        # scaler.scale(loss).backward()
+        # scaler.step(optimizer)
+        # scaler.update()
         scheduler.step()
         loss = loss.detach().item()
         running_loss += loss
-        if (i+1) % 100 == 0:
-            cpu_model = model.to("cpu")
-            ema_model.update_parameters(cpu_model)
+        profiler.disable()
+        profiler.dump_stats("output.prof")
+        # if (i+1) % 1 == 0:
+        #     cpu_model = model.to("cpu")
+        #     ema_model.update_parameters(cpu_model)
+        #     model = model.to("cuda")
         pbar.set_postfix({'Train Loss': f'{loss:.4f}'})
+
+    del data
+    del images
+    del tokens
+    del latents
+    del text_embeddings
+    del ctx
+    del ctx_pool
+    del t
+    del t_unsqueeze
+    del epsilon
+    del z
+    del targets
+    del velocities
+    del loss
+    del cpu_model
+
     return running_loss/(i+1)
 
 
@@ -172,24 +206,40 @@ def validate_one_epoch(model, epoch, num_epochs, val_loader, vae, clip, loss_fn)
     model.eval()
     running_loss = 0
     with torch.inference_mode():
-        pbar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+        pbar = tqdm(val_loader, desc=f"Epoch {epoch}/{num_epochs}")
         for i, data in enumerate(pbar):
-            images, tokens = data
+            images, tokens = data  # tokens are B x 77
             images, tokens = images.to("cuda"), tokens.to("cuda")
             latents = get_vae_latent(images, vae)  # B x C x H x W
-            with torch.autocast(device_type="cuda"):
-                ctx_pool = clip.encode_text(tokens)
-                ctx_pool /= ctx_pool.norm(dim=0)  # B x 512
-            t = model.sample_time(latents.size(0)).to("cuda")  # B
+            text_embeddings = clip.forward_intermediates(text=tokens, text_indices=1, normalize_intermediates=True)
+            ctx = text_embeddings["text_intermediates"][-1]
+            ctx_pool = text_embeddings["text_features"]
+            t = sample_time(latents.size(0)).to("cuda")  # B
             t_unsqueeze = t[:,None,None,None]
             epsilon = torch.randn_like(latents)  # B x 16 x 16 x 16
             z = (1 - t_unsqueeze)*latents + t_unsqueeze*epsilon
             targets = -t_unsqueeze/(1-t_unsqueeze)*z - t_unsqueeze*(-t_unsqueeze/(1-t_unsqueeze) - 1/t_unsqueeze)*epsilon
-            with torch.autocast(device_type="cuda"):
-                velocities = model(latents, tokens, ctx_pool, t)
-                loss = loss_fn(velocities, targets).detach().item()
+            velocities = model(latents, ctx, ctx_pool, t)
+            loss = loss_fn(velocities, targets).detach().item()
             running_loss += loss
             pbar.set_postfix({'Validation Loss': f'{loss:.4f}'})
+            break
+
+    del data
+    del images
+    del tokens
+    del latents
+    del text_embeddings
+    del ctx
+    del ctx_pool
+    del t
+    del t_unsqueeze
+    del epsilon
+    del z
+    del targets
+    del velocities
+    del loss
+
     return running_loss/(i+1)
 
 
@@ -231,15 +281,15 @@ def train_loop(model, epochs, vae, clip, train_loader, val_loader, optimizer, lo
     scaler = GradScaler("cuda")
 
     model = model.to("cuda")
-    print("Epoch 0:")
-    avg_train_loss = validate_one_epoch(model, 0, epochs, train_loader, vae, clip, loss_fn)
-    best_val_loss = validate_one_epoch(model, 0, epochs, val_loader, vae, clip, loss_fn)
+    print("Evaluating initial parameters on train and validation sets...")
+    avg_train_loss = validate_one_epoch(model, 0, 1, train_loader, vae, clip, loss_fn)
+    best_val_loss = validate_one_epoch(model, 0, 1, val_loader, vae, clip, loss_fn)
     wandb.log({"Average Train Loss Per Epoch": avg_train_loss,
                "Average Validation Loss Per Epoch": best_val_loss,
                "Epoch": 0})
 
+    print("Training...")
     for e in range(epochs):
-        print("Epcoh {}:".format(e+1))
         ema_model = ema_model.to("cpu")
         model = model.to("cuda")
         avg_train_loss = train_one_epoch(model, e, epochs, train_loader, vae, clip, optimizer, loss_fn, scheduler, scaler, ema_model)

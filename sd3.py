@@ -94,10 +94,11 @@ class MMDiTBlock(nn.Module):
         self._mlp_c = CustomMLP(n_heads*head_dim, x_dim, mlp_dim)
 
     def forward(self, xcy):
-        x, c, y = xcy
         # x: B x num_patches x embed
         # y: B x 320
         # c: B x 77 x 128
+        x, c, y = xcy
+
         y_1 = self._activation(y)
 
         y_x = self._linear_y_x(y_1)  # B x 6*x_dim
@@ -140,7 +141,6 @@ class DiT(nn.Module):
 
     def __init__(self):
         super().__init__()
-        # Since model size will be about half, I'd guess image sizes should be half as well. I will do quarter for simplicity
         # Image sizes will be 128 x 128
         self._x_dim = 128
         self._clip_dim = 512

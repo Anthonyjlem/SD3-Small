@@ -211,5 +211,7 @@ __marimo__/
 *.pt
 *.safetensors
 *.prof
+*.lprof
+*.txt
 __pycache__/
 wandb/

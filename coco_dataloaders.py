@@ -25,25 +25,23 @@ def def_dset_transforms():
     return train_transform, val_transform
 
 
-def build_dataloaders(batch_size):
+def build_dataloaders(batch_size, tokenizer):
     train_transform, val_transform = def_dset_transforms()
-    train_set = dset.CocoCaptions(root="../Datasets/COCO/train2017",
-                                  annFile="../Datasets/COCO/annotations_trainval2017/captions_train2017.json",
+    train_set = dset.CocoCaptions(root="../Datasets/COCO_subset/train2017",
+                                  annFile="../Datasets/COCO_subset/annotations_trainval2017/captions_train2017.json",
                                   transform=train_transform)
-    val_set = dset.CocoCaptions(root="../Datasets/COCO/val2017",
-                                annFile="../Datasets/COCO/annotations_trainval2017/captions_val2017.json",
+    val_set = dset.CocoCaptions(root="../Datasets/COCO_subset/val2017",
+                                annFile="../Datasets/COCO_subset/annotations_trainval2017/captions_val2017.json",
                                 transform=val_transform)
     
-    clip_tokenizer = open_clip.get_tokenizer('ViT-B-16')
-
     train_loader = torch.utils.data.DataLoader(train_set,
                                                batch_size=batch_size,
                                                shuffle=True,
-                                               collate_fn=partial(collate_fn, tokenizer=clip_tokenizer))
+                                               collate_fn=partial(collate_fn, tokenizer=tokenizer))
     val_loader = torch.utils.data.DataLoader(val_set,
                                              batch_size=batch_size,
                                              shuffle=False,
-                                             collate_fn=partial(collate_fn, tokenizer=clip_tokenizer))
+                                             collate_fn=partial(collate_fn, tokenizer=tokenizer))
     return train_loader, val_loader
 
 

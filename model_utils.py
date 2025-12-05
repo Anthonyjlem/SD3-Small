@@ -27,12 +27,10 @@ def get_vae_latent(image, vae):
     return latent
 
 
-def sample_time(num_samples):
+def sample_time(num_samples, device="cpu"):
     with torch.no_grad():
         # Logit-Normal Sampling
-        u = torch.randn(num_samples)
-        t = 1 / (1 + torch.exp(-u))
-    return t
+        return torch.sigmoid(torch.randn(num_samples, device=device))
 
 
 def show_first_image(data_loader):

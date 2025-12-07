@@ -1,7 +1,5 @@
 from functools import partial
-import random
 
-import open_clip
 import torch
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
@@ -10,7 +8,7 @@ import torchvision.transforms as transforms
 def def_dset_transforms():
     train_transform = transforms.Compose([
         transforms.Resize(128),
-        transforms.RandomCrop(128),
+        transforms.CenterCrop(128),
         transforms.ToTensor(),
         transforms.Normalize(mean=(0.5, 0.5, 0.5),
                              std=(0.5, 0.5, 0.5))  # normalize to [-1, 1]
@@ -36,7 +34,7 @@ def build_dataloaders(batch_size, tokenizer):
     
     train_loader = torch.utils.data.DataLoader(train_set,
                                                batch_size=batch_size,
-                                               shuffle=True,
+                                               shuffle=False,  # no shuffle for easy training on the same subset
                                                collate_fn=partial(collate_fn, tokenizer=tokenizer))
     val_loader = torch.utils.data.DataLoader(val_set,
                                              batch_size=batch_size,
@@ -47,7 +45,7 @@ def build_dataloaders(batch_size, tokenizer):
 
 def collate_fn(batch, tokenizer):
     imgs, all_captions = zip(*batch)
-    captions = [random.choice(caps) for caps in all_captions]
+    captions = [caps[0] for caps in all_captions]
     tokens = tokenizer(captions)
     imgs = torch.stack(imgs)
     return imgs, tokens

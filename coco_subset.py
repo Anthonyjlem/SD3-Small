@@ -47,22 +47,17 @@ def make_ann_subset(subset_dir, org_json, subset_json):
 
 
 if __name__ == "__main__":
-    with open("../Datasets/COCO_subset/annotations_trainval2017/captions_train2017.json", "r") as f:
-        ann = json.load(f)
-    for i in range(10000):
-        if ann["annotations"][i]["image_id"] == 40881:
-            print(ann["annotations"][i])
-    # copy_image_subset("../Datasets/COCO_subset/train2017",
-    #             "../Datasets/COCO/train2017",
-    #             "../Datasets/COCO/annotations_trainval2017/captions_train2017.json",
-    #             640)
-    # copy_image_subset("../Datasets/COCO_subset/val2017",
-    #             "../Datasets/COCO/val2017",
-    #             "../Datasets/COCO/annotations_trainval2017/captions_val2017.json",
-    #             272)
-    # make_ann_subset("../Datasets/COCO_subset/train2017",
-    #                 "../Datasets/COCO/annotations_trainval2017/captions_train2017.json",
-    #                 "../Datasets/COCO_subset/annotations_trainval2017/captions_train2017.json")
-    # make_ann_subset("../Datasets/COCO_subset/val2017",
-    #                 "../Datasets/COCO/annotations_trainval2017/captions_val2017.json",
-    #                 "../Datasets/COCO_subset/annotations_trainval2017/captions_val2017.json")
+    copy_image_subset("../Datasets/COCO_subset/train2017",
+                "../Datasets/COCO/train2017",
+                "../Datasets/COCO/annotations_trainval2017/captions_train2017.json",
+                640)
+    copy_image_subset("../Datasets/COCO_subset/val2017",
+                "../Datasets/COCO/val2017",
+                "../Datasets/COCO/annotations_trainval2017/captions_val2017.json",
+                272)
+    make_ann_subset("../Datasets/COCO_subset/train2017",
+                    "../Datasets/COCO/annotations_trainval2017/captions_train2017.json",
+                    "../Datasets/COCO_subset/annotations_trainval2017/captions_train2017.json")
+    make_ann_subset("../Datasets/COCO_subset/val2017",
+                    "../Datasets/COCO/annotations_trainval2017/captions_val2017.json",
+                    "../Datasets/COCO_subset/annotations_trainval2017/captions_val2017.json")

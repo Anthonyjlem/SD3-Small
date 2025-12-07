@@ -22,11 +22,12 @@ from sd3 import DiT
 os.environ["WANDB_MODE"] = "online"
 
 
+VALIDATION_AND_EMA = False
 PROFILE_VRAM = False
 BATCH_SIZE = 8
 LR = 1e-4
 WARMUP_STEPS = 1000
-EPOCHS = 1000
+EPOCHS = 10000
 TRAIN_MODEL_SAVE_PATH = "D:/External Drive/Anthony/sd3_checkpoints/model.pt"
 VAL_MODEL_SAVE_PATH = "D:/External Drive/Anthony/sd3_checkpoints/model_ema.pt"
 SAMPLE_IMG_PATH = "D:/External Drive/Anthony/sd3_checkpoints/sample_img.png"
@@ -52,10 +53,10 @@ def train_one_epoch(model, epoch, num_epochs, train_loader, vae, clip, optimizer
         t_unsqueeze = t[:,None,None,None]
         epsilon = torch.randn_like(latents)
         z = (1 - t_unsqueeze)*latents + t_unsqueeze*epsilon
-        targets = -t_unsqueeze/(1-t_unsqueeze)*z - t_unsqueeze*(-t_unsqueeze/(1-t_unsqueeze) - 1/t_unsqueeze)*epsilon
+        targets = epsilon - latents
         optimizer.zero_grad()
         with autocast("cuda"):
-            velocities = model(latents, ctx, ctx_pool, t)
+            velocities = model(z, ctx, ctx_pool, t)
             if PROFILE_VRAM:
                 vram_profiler.sample_vram()
             loss = loss_fn(velocities, targets)
@@ -75,8 +76,10 @@ def train_one_epoch(model, epoch, num_epochs, train_loader, vae, clip, optimizer
             print(f"Peak VRAM during training: {vram_profiler.get_peak_vram() / (1024**3):.2f} GB")
             vram_profiler.shutdown()
         pbar.set_postfix({'Train Loss': f'{loss:.4f}'})
-    model = model.to("cpu")
-    ema_model.update_parameters(model)
+        break
+    if VALIDATION_AND_EMA:
+        model = model.to("cpu")
+        ema_model.update_parameters(model)
 
     return running_loss/(i+1)
 
@@ -98,12 +101,13 @@ def validate_one_epoch(model, epoch, num_epochs, val_loader, vae, clip, loss_fn)
             t_unsqueeze = t[:,None,None,None]
             epsilon = torch.randn_like(latents)  # B x 16 x 16 x 16
             z = (1 - t_unsqueeze)*latents + t_unsqueeze*epsilon
-            targets = -t_unsqueeze/(1-t_unsqueeze)*z - t_unsqueeze*(-t_unsqueeze/(1-t_unsqueeze) - 1/t_unsqueeze)*epsilon
+            targets = epsilon - latents
             with autocast("cuda"):
-                velocities = model(latents, ctx, ctx_pool, t)
+                velocities = model(z, ctx, ctx_pool, t)
                 loss = loss_fn(velocities, targets).detach().item()
             running_loss += loss
             pbar.set_postfix({'Validation Loss': f'{loss:.4f}'})
+            break
 
     return running_loss/(i+1)
 
@@ -119,7 +123,7 @@ def generate_sample(text, model, vae, clip, clip_tokenizer, num_steps=100):
         timesteps = torch.linspace(1, 0, num_steps+1, device="cuda")
         dt = -1 / num_steps
         for step in tqdm(timesteps[:-1]):
-            velocities = model(latents, ctx, ctx_pool, step[None,None])
+            velocities = model(latents, ctx, ctx_pool, step[None])
             latents = latents + dt * velocities
         decoded_image_tensor = vae.decode(latents / vae.config.scaling_factor).sample  # undo scaling factor
         decoded_image_tensor = (decoded_image_tensor / 2 + 0.5).clamp(0, 1)*255  # denormalize to [0, 255]
@@ -142,19 +146,23 @@ def train_loop(model, epochs, vae, clip, clip_tokenizer, train_loader, val_loade
     model = model.to("cuda")
     print("Evaluating initial parameters on train and validation sets...")
     avg_train_loss = validate_one_epoch(model, 0, 1, train_loader, vae, clip, loss_fn)
-    best_val_loss = validate_one_epoch(model, 0, 1, val_loader, vae, clip, loss_fn)
-    text = "A bowl containing soup made up of broccoli, red onions, cauliflower and scallions."  # ID: 40881
-    img = generate_sample(text, model, vae, clip, clip_tokenizer, num_steps=100)
+    if VALIDATION_AND_EMA:
+        best_val_loss = validate_one_epoch(model, 0, 1, val_loader, vae, clip, loss_fn)
+    text = "A dog sitting on the inside of a white boat."  # ID: 400
+    img = generate_sample(text, model, vae, clip, clip_tokenizer, num_steps=5)
     Image.fromarray(img).save(SAMPLE_IMG_PATH)
-    wandb.log({"Average Train Loss Per Epoch": avg_train_loss,
-               "Average Validation Loss Per Epoch": best_val_loss,
-               "Epoch": 0,
-               "Smaple Image": wandb.Image(SAMPLE_IMG_PATH, caption=text)})
+    log = {"Average Train Loss Per Epoch": avg_train_loss,
+           "Epoch": 0,
+           "Smaple Image": wandb.Image(SAMPLE_IMG_PATH, caption=text)}
+    if VALIDATION_AND_EMA:
+        log["Average Validation Loss Per Epoch"] = best_val_loss
+    wandb.log(log)
 
     print("Training...")
     for e in range(epochs):
-        ema_model = ema_model.to("cpu")
-        model = model.to("cuda")
+        if VALIDATION_AND_EMA:
+            ema_model = ema_model.to("cpu")
+            model = model.to("cuda")
         avg_train_loss = train_one_epoch(model, e, epochs, train_loader, vae, clip, optimizer, loss_fn, scheduler, scaler, ema_model)
         checkpoint = {
             "epoch": e,
@@ -163,27 +171,39 @@ def train_loop(model, epochs, vae, clip, clip_tokenizer, train_loader, val_loade
             "scheduler_state_dict": scheduler.state_dict(),
             "avg_train_loss": avg_train_loss,
         }
-        torch.save(checkpoint, TRAIN_MODEL_SAVE_PATH)
-        model = model.to("cpu")
-        ema_model = ema_model.to("cuda")
-        avg_val_loss = validate_one_epoch(ema_model, e, epochs, val_loader, vae, clip, loss_fn)
-        checkpoint = {
-            "epoch": e,
-            "model_state_dict": ema_model.state_dict(),
-            "avg_val_loss": avg_val_loss,
-        }
-        torch.save(checkpoint, VAL_MODEL_SAVE_PATH)
-        img = generate_sample(text, ema_model, vae, clip, clip_tokenizer, num_steps=100)
+        tmp_save_file = os.path.join(os.path.dirname(TRAIN_MODEL_SAVE_PATH), "model_tmp.pt")
+        torch.save(checkpoint, tmp_save_file)
+        os.replace(tmp_save_file, TRAIN_MODEL_SAVE_PATH)
+        if VALIDATION_AND_EMA:
+            model = model.to("cpu")
+            ema_model = ema_model.to("cuda")
+            avg_val_loss = validate_one_epoch(ema_model, e, epochs, val_loader, vae, clip, loss_fn)
+            checkpoint = {
+                "epoch": e,
+                "model_state_dict": ema_model.state_dict(),
+                "avg_val_loss": avg_val_loss,
+            }
+            tmp_save_file = os.path.join(os.path.dirname(VAL_MODEL_SAVE_PATH), "model_ema_tmp.pt")
+            torch.save(checkpoint, tmp_save_file)
+            os.replace(tmp_save_file, VAL_MODEL_SAVE_PATH)
+            img = generate_sample(text, ema_model, vae, clip, clip_tokenizer, num_steps=5)
+        else:
+            img = generate_sample(text, model, vae, clip, clip_tokenizer, num_steps=5)
         Image.fromarray(img).save(SAMPLE_IMG_PATH)
-        wandb.log({"Average Train Loss Per Epoch": avg_train_loss,
-                   "Average Validation Loss Per Epoch": avg_val_loss,
-                   "Epoch": e+1,
-                   "Smaple Image": wandb.Image(SAMPLE_IMG_PATH, caption=text)})
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            state_dict = ema_model.state_dict()
-            output_path = os.path.join(os.path.dirname(VAL_MODEL_SAVE_PATH), "model_{}.safetensors".format(e+1))
-            save_file(state_dict, output_path)
+        log = {"Average Train Loss Per Epoch": avg_train_loss,
+               "Epoch": e+1,
+               "Smaple Image": wandb.Image(SAMPLE_IMG_PATH, caption=text)}
+        if VALIDATION_AND_EMA:
+            log["Average Validation Loss Per Epoch"] = avg_val_loss
+        wandb.log(log)
+        if VALIDATION_AND_EMA:
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                state_dict = ema_model.state_dict()
+                tmp_save_file = os.path.join(os.path.dirname(VAL_MODEL_SAVE_PATH), "model_{}_tmp.safetensors".format(e+1))
+                save_file(state_dict, tmp_save_file)
+                output_path = os.path.join(os.path.dirname(VAL_MODEL_SAVE_PATH), "model_{}.safetensors".format(e+1))
+                os.replace(tmp_save_file, output_path)
 
 
 if __name__ == "__main__":

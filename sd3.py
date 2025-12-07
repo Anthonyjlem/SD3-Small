@@ -194,7 +194,7 @@ class SD3(nn.Module):
         super().__init__()
         self._device = device
         self._clip = clip.to(self._device)
-        self._tokenizer = tokenizer.to(self._device)
+        self._tokenizer = tokenizer
         self._vae = vae.to(self._device)
         self._dit = dit.to(self._device)
 

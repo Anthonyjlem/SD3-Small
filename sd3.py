@@ -209,7 +209,7 @@ class SD3(nn.Module):
             timesteps = torch.linspace(1, 0, num_steps+1, device=self._device)
             dt = -1 / num_steps
             for step in tqdm(timesteps[:-1]):
-                velocities = self._dit(latents, ctx, ctx_pool, step[None,None])
+                velocities = self._dit(latents, ctx, ctx_pool, step[None])
                 latents = latents + dt * velocities
             decoded_image_tensor = self._vae.decode(latents / self._vae.config.scaling_factor).sample  # undo scaling factor
             decoded_image_tensor = (decoded_image_tensor / 2 + 0.5).clamp(0, 1)  # denormalize to [0, 1]
